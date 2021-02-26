@@ -20,7 +20,6 @@ class Settings(object):
         self.forward_hooks = []
         self.backward_hooks = []
 
-
 global_settings_initialized = False
 global_settings = Settings()
 supported_layers = ['Linear', 'Conv2d']
@@ -66,6 +65,8 @@ def register(model: nn.Module):
         layer_types_seen.add(_layer_type(layer))
         if _layer_type(layer) in supported_layers:
             layers_registered += 1
+            # Here we're registering forward and backward hooks
+            # Ah okay, and _forward,_backward will call each hook that we add to global_settings.forward_hooks, backward_hooks
             global_settings.hook_handles.append(layer.register_forward_hook(_forward_hook))
             layer.register_backward_hook(_backward_hook)   # don't save handle, https://github.com/pytorch/pytorch/issues/25723
     assert layers_registered, f"Failed to register hooks because model had no supported layers for hooks. Model had layer types {', '.join(list(layer_types_seen))}, but supported types are {', '.join(supported_layers)}"
@@ -80,6 +81,7 @@ def module_hook(hook: Callable):
     forward_hook_called = [False]
     backward_hook_called = [False]
 
+    # Define forward and backward hook
     def forward_hook(layer: nn.Module, input_: Tuple[torch.Tensor], output: torch.Tensor):
         assert len(input_) == 1, "Only support single input modules on forward."
         assert type(output) == torch.Tensor, "Only support single output modules on forward."
@@ -93,14 +95,65 @@ def module_hook(hook: Callable):
         hook(layer, input_, backprops)
         backward_hook_called[0] = True
 
+    # Append these hooks to global settings
     global_settings.forward_hooks.append(forward_hook)
     global_settings.backward_hooks.append(backward_hook)
     try:
-        yield
+        yield # yields, which will then run whatever is in the code block
         assert forward_hook_called[0] or backward_hook_called[0], "Hook was called neither on forward nor backward pass, did you register your model?"
+        # If this vvv fails, it must mean that forward and backward was called within code block? 
         assert not (forward_hook_called[0] and backward_hook_called[0]), "Hook was called both on forward and backward pass, did you register your model?"
     finally:
         global_settings.forward_hooks.pop()
+        global_settings.backward_hooks.pop()
+
+@contextmanager
+def forward_module_hook(hook: Callable):
+    """Context manager for running given hook on forward or backward."""
+
+    # TODO(y): use weak ref for the hook handles so they are removed when model goes out of scope
+    assert global_settings.hook_handles, "Global hooks have not been registered. Make sure to call .register(model) on your model"
+    forward_hook_called = [False]
+
+    # Define forward and backward hook
+    def forward_hook(layer: nn.Module, input_: Tuple[torch.Tensor], output: torch.Tensor):
+        assert len(input_) == 1, "Only support single input modules on forward."
+        assert type(output) == torch.Tensor, "Only support single output modules on forward."
+        activations = input_[0].detach()
+        hook(layer, activations, output)
+        forward_hook_called[0] = True
+
+    # Append these hooks to global settings
+    global_settings.forward_hooks.append(forward_hook)
+    try:
+        yield # yields, which will then run whatever is in the code block
+        assert forward_hook_called[0]
+        # assert forward_hook_called[0] or backward_hook_called[0], "Hook was called neither on forward nor backward pass, did you register your model?"
+        # # If this vvv fails, it must mean that forward and backward was called within code block? 
+        # assert not (forward_hook_called[0] and backward_hook_called[0]), "Hook was called both on forward and backward pass, did you register your model?"
+    finally:
+        global_settings.forward_hooks.pop()
+
+@contextmanager
+def backward_module_hook(hook: Callable):
+    """Context manager for running given hook on forward or backward."""
+
+    # TODO(y): use weak ref for the hook handles so they are removed when model goes out of scope
+    assert global_settings.hook_handles, "Global hooks have not been registered. Make sure to call .register(model) on your model"
+    backward_hook_called = [False]
+
+    def backward_hook(layer: nn.Module, input_: Tuple[torch.Tensor], output: Tuple[torch.Tensor]):
+        assert len(output) == 1, "Only support single output modules on backward."
+        backprops = output[0].detach()
+        hook(layer, input_, backprops)
+        backward_hook_called[0] = True
+
+    # Append these hooks to global settings
+    global_settings.backward_hooks.append(backward_hook)
+    try:
+        yield # yields, which will then run whatever is in the code block
+        assert backward_hook_called[0]
+    finally:
         global_settings.backward_hooks.pop()
 
 
