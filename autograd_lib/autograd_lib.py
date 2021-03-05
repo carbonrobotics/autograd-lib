@@ -128,9 +128,6 @@ def forward_module_hook(hook: Callable):
     try:
         yield # yields, which will then run whatever is in the code block
         assert forward_hook_called[0]
-        # assert forward_hook_called[0] or backward_hook_called[0], "Hook was called neither on forward nor backward pass, did you register your model?"
-        # # If this vvv fails, it must mean that forward and backward was called within code block? 
-        # assert not (forward_hook_called[0] and backward_hook_called[0]), "Hook was called both on forward and backward pass, did you register your model?"
     finally:
         global_settings.forward_hooks.pop()
 
